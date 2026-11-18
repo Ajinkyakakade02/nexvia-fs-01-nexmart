@@ -13,6 +13,7 @@ import {
 const router = Router();
 
 router.get('/', validateQuery(productQuerySchema), productController.getProducts);
+router.get('/search', productController.searchProducts);
 router.get('/vendor/my-products', authenticate, authorize(UserRole.VENDOR), productController.getVendorProducts);
 router.post('/upload-url', authenticate, authorize(UserRole.VENDOR, UserRole.ADMIN), productController.generateUploadUrl);
 router.get('/:id', productController.getProductById);

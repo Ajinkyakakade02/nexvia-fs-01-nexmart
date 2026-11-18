@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 import { IApiResponse } from '../types/index.js';
+import { serializePrisma } from './prismaSerializer.js';
 
 export const success = <T>(
   res: Response,
@@ -8,10 +9,11 @@ export const success = <T>(
   message: string = 'Success',
   statusCode: number = StatusCodes.OK
 ): Response => {
+  const transformedData = data !== undefined ? serializePrisma(data) : undefined;
   const responsePayload: IApiResponse<T> = {
     success: true,
     message,
-    data
+    data: transformedData
   };
   return res.status(statusCode).json(responsePayload);
 };
@@ -29,3 +31,5 @@ export const error = (
   };
   return res.status(statusCode).json(responsePayload);
 };
+
+export default { success, error };

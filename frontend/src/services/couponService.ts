@@ -11,7 +11,7 @@ export const couponService = {
       valid: boolean;
       discountAmount: number;
       coupon: Coupon;
-    }>>('/coupons/validate', { code, orderAmount });
+    }>>('/coupons/validate', { code, orderAmount, orderTotal: orderAmount });
     return response.data.data!;
   },
 };

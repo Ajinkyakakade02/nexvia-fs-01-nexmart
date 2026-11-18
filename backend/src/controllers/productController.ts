@@ -2,8 +2,28 @@ import { Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import * as productService from '../services/productService.js';
+import * as searchService from '../services/searchService.js';
 import { getStorageProvider } from '../services/storageService.js';
 import { success } from '../utils/apiResponse.js';
+
+export const searchProducts = asyncHandler(async (req: Request, res: Response) => {
+  const { query, category, vendor, minPrice, maxPrice, inStock, status, sort, page, limit } = req.query;
+
+  const result = await searchService.searchProducts({
+    query: query as string,
+    category: category as string,
+    vendor: vendor as string,
+    minPrice: minPrice ? parseFloat(minPrice as string) : undefined,
+    maxPrice: maxPrice ? parseFloat(maxPrice as string) : undefined,
+    inStock: inStock === 'true',
+    status: status as string,
+    sort: sort as string,
+    page: page ? parseInt(page as string) : 1,
+    limit: limit ? parseInt(limit as string) : 10
+  });
+
+  return success(res, result, 'Elasticsearch search results retrieved successfully', StatusCodes.OK);
+});
 
 export const createProduct = asyncHandler(async (req: Request, res: Response) => {
   const product = await productService.createProduct(req.user!.userId, req.body);
@@ -67,8 +87,7 @@ export const getVendorProducts = asyncHandler(async (req: Request, res: Response
   const result = await productService.getVendorProducts(req.user!.userId, {
     page,
     limit,
-    status,
-    search
+    status
   });
 
   return res.status(StatusCodes.OK).json({

@@ -14,6 +14,8 @@ const envSchema = z.object({
   API_BASE_URL: z.string().default('http://localhost:5000'),
 
   MONGODB_URI: z.string().default('mongodb://localhost:27017/fs01_marketplace'),
+  DATABASE_URL: z.string().default('postgresql://postgres:postgrespassword@localhost:5432/fs01_marketplace?schema=public'),
+  DB_PROVIDER: z.enum(['auto', 'prisma', 'mongodb']).default('auto'),
 
   JWT_ACCESS_SECRET: z.string().default('dev_jwt_access_secret_key_1234567890_min_32_chars_fs01'),
   JWT_REFRESH_SECRET: z.string().default('dev_jwt_refresh_secret_key_1234567890_min_32_chars_fs01'),
