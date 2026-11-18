@@ -6,10 +6,13 @@ import { generateInvoicePDF } from '../services/invoiceService.js';
 import { success } from '../utils/apiResponse.js';
 
 export const createOrder = asyncHandler(async (req: Request, res: Response) => {
-  const { shippingAddressId, couponCode } = req.body;
+  const { shippingAddressId, shippingAddressIndex, shippingAddress, couponCode } = req.body;
   const order = await orderService.createOrder(
     req.user!.userId,
-    shippingAddressId,
+    {
+      shippingAddressId: shippingAddressId ?? shippingAddressIndex,
+      shippingAddress
+    },
     couponCode
   );
   return success(res, order, 'Order created successfully', StatusCodes.CREATED);

@@ -13,9 +13,29 @@ import { serializePrisma, toDecimal } from '../utils/prismaSerializer.js';
 
 export const createOrder = async (
   customerId: string,
-  shippingAddressIndex: number,
+  shippingAddressInput:
+    | number
+    | {
+        shippingAddressId?: string | number;
+        shippingAddress?: any;
+      },
   couponCode?: string
 ) => {
+  // Normalize address input
+  let rawAddressObj: any = undefined;
+  let addressLookupId: string | number | undefined = undefined;
+
+  if (typeof shippingAddressInput === 'number') {
+    addressLookupId = shippingAddressInput;
+  } else if (shippingAddressInput && typeof shippingAddressInput === 'object') {
+    if (shippingAddressInput.shippingAddress) {
+      rawAddressObj = shippingAddressInput.shippingAddress;
+    }
+    if (shippingAddressInput.shippingAddressId !== undefined) {
+      addressLookupId = shippingAddressInput.shippingAddressId;
+    }
+  }
+
   if (isPrismaAvailable()) {
     const user = await prisma.user.findUnique({
       where: { id: customerId },
@@ -39,7 +59,52 @@ export const createOrder = async (
       throw ApiError.notFound('Customer not found');
     }
 
-    const shippingAddress = user.addresses[shippingAddressIndex];
+    let shippingAddress: any = null;
+
+    if (rawAddressObj) {
+      const street =
+        rawAddressObj.street ||
+        rawAddressObj.addressLine1 +
+          (rawAddressObj.addressLine2 ? ', ' + rawAddressObj.addressLine2 : '');
+      const postalCode = rawAddressObj.postalCode || rawAddressObj.pincode;
+
+      let existing = await prisma.address.findFirst({
+        where: {
+          userId: customerId,
+          street,
+          city: rawAddressObj.city,
+          postalCode
+        }
+      });
+
+      if (!existing) {
+        existing = await prisma.address.create({
+          data: {
+            userId: customerId,
+            fullName: rawAddressObj.fullName || user.name,
+            phone: rawAddressObj.phone || user.phone || '0000000000',
+            street,
+            city: rawAddressObj.city,
+            state: rawAddressObj.state,
+            postalCode,
+            country: rawAddressObj.country || 'India',
+            isDefault: user.addresses.length === 0
+          }
+        });
+      }
+      shippingAddress = existing;
+    } else if (addressLookupId !== undefined) {
+      if (typeof addressLookupId === 'number' || (/^\d+$/.test(String(addressLookupId)) && !isNaN(Number(addressLookupId)))) {
+        const idx = Number(addressLookupId);
+        shippingAddress = user.addresses[idx];
+      } else {
+        const idStr = String(addressLookupId);
+        shippingAddress =
+          user.addresses.find((a) => a.id === idStr) ||
+          (await prisma.address.findUnique({ where: { id: idStr } }));
+      }
+    }
+
     if (!shippingAddress) {
       throw ApiError.badRequest('Invalid shipping address selected');
     }
@@ -219,7 +284,45 @@ export const createOrder = async (
     throw ApiError.notFound('Customer not found');
   }
 
-  const shippingAddress = user.addresses[shippingAddressIndex];
+  let shippingAddress: any = null;
+
+  if (rawAddressObj) {
+    const street =
+      rawAddressObj.street ||
+      rawAddressObj.addressLine1 +
+        (rawAddressObj.addressLine2 ? ', ' + rawAddressObj.addressLine2 : '');
+    const postalCode = rawAddressObj.postalCode || rawAddressObj.pincode;
+
+    shippingAddress = {
+      fullName: rawAddressObj.fullName || user.name,
+      phone: rawAddressObj.phone || user.phone || '0000000000',
+      street,
+      city: rawAddressObj.city,
+      state: rawAddressObj.state,
+      postalCode,
+      country: rawAddressObj.country || 'India',
+      isDefault: !user.addresses || user.addresses.length === 0
+    };
+
+    // Save to user addresses if not already existing
+    const exists = user.addresses?.some(
+      (a: any) => a.street === street && a.city === rawAddressObj.city && a.postalCode === postalCode
+    );
+    if (!exists) {
+      user.addresses = user.addresses || [];
+      user.addresses.push(shippingAddress);
+      await user.save();
+    }
+  } else if (addressLookupId !== undefined) {
+    if (typeof addressLookupId === 'number' || (/^\d+$/.test(String(addressLookupId)) && !isNaN(Number(addressLookupId)))) {
+      const idx = Number(addressLookupId);
+      shippingAddress = user.addresses?.[idx];
+    } else {
+      const idStr = String(addressLookupId);
+      shippingAddress = user.addresses?.find((a: any) => a._id?.toString() === idStr || a.id === idStr);
+    }
+  }
+
   if (!shippingAddress) {
     throw ApiError.badRequest('Invalid shipping address selected');
   }

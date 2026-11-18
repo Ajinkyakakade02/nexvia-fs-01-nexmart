@@ -25,19 +25,36 @@ if (env.NODE_ENV !== 'production') {
 }
 
 /**
- * Attempt to connect to PostgreSQL via Prisma Client.
- * Gracefully handles failure if PostgreSQL/Docker is not running.
+ * Check live connection health to PostgreSQL via Prisma.
  */
-export const connectPrisma = async (): Promise<boolean> => {
+export const prismaHealthCheck = async (): Promise<boolean> => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    isPrismaConnected = true;
+    return true;
+  } catch {
+    isPrismaConnected = false;
+    return false;
+  }
+};
+
+/**
+ * Attempt to connect to PostgreSQL via Prisma Client.
+ * When `required = true`, throws an error if connection fails.
+ */
+export const connectPrisma = async (required = false): Promise<boolean> => {
   try {
     await prisma.$connect();
-    // Test query
     await prisma.$queryRaw`SELECT 1`;
     isPrismaConnected = true;
     logger.info('[PostgreSQL/Prisma] Connected successfully to database');
     return true;
   } catch (error: any) {
     isPrismaConnected = false;
+    if (required) {
+      logger.error(`[PostgreSQL/Prisma] Fatal: Failed to connect to required PostgreSQL at ${env.DATABASE_URL}: ${error.message}`);
+      throw new Error(`Failed to connect to required PostgreSQL database via Prisma: ${error.message}`);
+    }
     logger.warn(`[PostgreSQL/Prisma] Connection notice: Unable to connect to PostgreSQL at ${env.DATABASE_URL}. Details: ${error.message}`);
     return false;
   }
