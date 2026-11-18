@@ -213,3 +213,9 @@ export const updateCommissionSettings = asyncHandler(async (req: Request, res: R
   );
 });
 
+export const reindexSearch = asyncHandler(async (_req: Request, res: Response) => {
+  const searchService = await import('../services/searchService.js');
+  await searchService.reindexAll();
+  return success(res, null, 'Elasticsearch search index rebuild initiated', StatusCodes.OK);
+});
+

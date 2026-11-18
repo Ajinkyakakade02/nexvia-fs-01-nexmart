@@ -15,7 +15,17 @@ export const createCouponSchema = z.object({
 
 export const updateCouponSchema = createCouponSchema.partial();
 
-export const validateCouponSchema = z.object({
-  code: z.string().min(1, 'Coupon code is required'),
-  orderTotal: z.coerce.number().positive('Order total must be greater than 0')
-});
+export const validateCouponSchema = z
+  .object({
+    code: z.string().min(1, 'Coupon code is required'),
+    orderTotal: z.coerce.number().positive('Order total must be greater than 0').optional(),
+    orderAmount: z.coerce.number().positive('Order amount must be greater than 0').optional()
+  })
+  .refine((data) => data.orderTotal !== undefined || data.orderAmount !== undefined, {
+    message: 'orderTotal or orderAmount is required',
+    path: ['orderTotal']
+  })
+  .transform((data) => ({
+    code: data.code.toUpperCase(),
+    orderTotal: (data.orderTotal !== undefined ? data.orderTotal : data.orderAmount)!
+  }));

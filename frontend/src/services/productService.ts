@@ -31,12 +31,20 @@ export const productService = {
   },
 
   async createProduct(productData: ProductFormData): Promise<Product> {
-    const response = await api.post<ApiResponse<Product>>('/vendor/products', productData);
+    const payload = {
+      ...productData,
+      categoryId: (productData as any).categoryId || productData.category
+    };
+    const response = await api.post<ApiResponse<Product>>('/vendor/products', payload);
     return response.data.data!;
   },
 
   async updateProduct(id: string, productData: Partial<ProductFormData>): Promise<Product> {
-    const response = await api.put<ApiResponse<Product>>(`/vendor/products/${id}`, productData);
+    const payload = {
+      ...productData,
+      ...(productData.category ? { categoryId: productData.category } : {})
+    };
+    const response = await api.put<ApiResponse<Product>>(`/vendor/products/${id}`, payload);
     return response.data.data!;
   },
 

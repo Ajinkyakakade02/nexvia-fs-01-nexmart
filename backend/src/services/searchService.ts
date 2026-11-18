@@ -1,7 +1,8 @@
 import { getElasticsearchClient } from '../config/elasticsearch.js';
+import prisma, { isPrismaAvailable } from '../config/prisma.js';
+import Product from '../models/Product.js';
 import { ApiError } from '../utils/apiError.js';
 import logger from '../utils/logger.js';
-import Product from '../models/Product.js';
 
 const INDEX_NAME = 'products';
 
@@ -17,8 +18,8 @@ export const createIndexIfNotExists = async () => {
         body: {
           mappings: {
             properties: {
-              name: { type: 'text' },
-              description: { type: 'text' },
+              name: { type: 'text', analyzer: 'standard' },
+              description: { type: 'text', analyzer: 'standard' },
               category: { type: 'keyword' },
               vendor: { type: 'keyword' },
               vendorName: { type: 'keyword' },
@@ -42,17 +43,22 @@ export const indexProduct = async (product: any, vendorName?: string) => {
   const es = getElasticsearchClient();
   if (!es) return;
 
+  const id = product.id || product._id?.toString();
+  const categoryId = product.categoryId || product.category?.toString() || product.category?._id?.toString();
+  const vendorId = product.vendorId || product.vendor?.toString() || product.vendor?._id?.toString();
+  const numericPrice = typeof product.price === 'object' && product.price !== null ? Number(product.price) : Number(product.price);
+
   try {
     await es.index({
       index: INDEX_NAME,
-      id: product._id.toString(),
+      id,
       document: {
         name: product.name,
         description: product.description,
-        category: product.category?.toString() || product.category?._id?.toString(),
-        vendor: product.vendor?.toString() || product.vendor?._id?.toString(),
-        vendorName: vendorName || '',
-        price: product.price,
+        category: categoryId,
+        vendor: vendorId,
+        vendorName: vendorName || product.vendor?.businessName || '',
+        price: numericPrice,
         stock: product.stock,
         avgRating: product.avgRating || 0,
         status: product.status,
@@ -60,7 +66,7 @@ export const indexProduct = async (product: any, vendorName?: string) => {
       }
     });
   } catch (error: any) {
-    logger.warn(`Failed to index product ${product._id} to ES:`, error.message);
+    logger.warn(`Failed to index product ${id} to ES:`, error.message);
   }
 };
 
@@ -92,7 +98,7 @@ export const searchProducts = async (params: {
 }) => {
   const es = getElasticsearchClient();
   if (!es) {
-    throw new ApiError(503, 'Search service is currently unavailable');
+    throw new ApiError(503, 'Elasticsearch search service is currently offline or unreachable at port 9200');
   }
 
   const {
@@ -163,6 +169,12 @@ export const searchProducts = async (params: {
 
     return {
       productIds: hits.map((hit) => hit._id),
+      hits: hits.map((hit) => ({
+        id: hit._id,
+        _id: hit._id,
+        score: hit._score,
+        source: hit._source
+      })),
       total,
       page,
       limit,
@@ -170,6 +182,9 @@ export const searchProducts = async (params: {
     };
   } catch (error: any) {
     logger.error('Elasticsearch search execution failed:', error);
+    if (error.name === 'ConnectionError' || error.message?.includes('connect') || error.code === 'ECONNREFUSED') {
+      throw new ApiError(503, 'Elasticsearch search service is currently offline or unreachable at port 9200', error.message);
+    }
     throw new ApiError(500, 'Search execution error', error.message);
   }
 };
@@ -179,9 +194,30 @@ export const reindexAll = async () => {
   if (!es) return;
 
   await createIndexIfNotExists();
+
+  if (isPrismaAvailable()) {
+    const products = await prisma.product.findMany({
+      where: { isDeleted: false },
+      include: { vendor: true }
+    });
+    for (const product of products) {
+      await indexProduct(product, product.vendor?.businessName);
+    }
+    logger.info(`Re-indexed ${products.length} Prisma products to Elasticsearch`);
+    return;
+  }
+
   const products = await Product.find({ isDeleted: false });
   for (const product of products) {
     await indexProduct(product);
   }
   logger.info(`Re-indexed ${products.length} products to Elasticsearch`);
+};
+
+export default {
+  createIndexIfNotExists,
+  indexProduct,
+  removeProduct,
+  searchProducts,
+  reindexAll
 };
