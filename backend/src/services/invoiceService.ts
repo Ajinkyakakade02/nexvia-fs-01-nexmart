@@ -1,5 +1,5 @@
 import PDFDocument from 'pdfkit';
-import Order from '../models/Order.js';
+import prisma from '../config/prisma.js';
 import env from '../config/env.js';
 import { ApiError } from '../utils/apiError.js';
 import { UserRole } from '../types/index.js';
@@ -9,18 +9,38 @@ export const generateInvoicePDF = async (
   userId: string,
   role: UserRole
 ): Promise<Buffer> => {
-  const order = await Order.findById(orderId)
-    .populate('customer', 'name email phone')
-    .populate('vendorOrders.vendor', 'name email');
+  const order = await prisma.order.findUnique({
+    where: { id: orderId },
+    include: {
+      customer: { select: { id: true, name: true, email: true, phone: true } },
+      vendorOrders: {
+        include: {
+          vendor: { select: { id: true, businessName: true } },
+          items: true
+        }
+      }
+    }
+  });
 
   if (!order) {
     throw ApiError.notFound('Order not found');
   }
 
   // Access check
-  if (role === UserRole.CUSTOMER && order.customer._id.toString() !== userId) {
+  if (role === UserRole.CUSTOMER && order.customerId !== userId) {
     throw ApiError.forbidden('You do not have access to this invoice');
   }
+
+  const items = order.vendorOrders.flatMap((vo) =>
+    vo.items.map((it) => ({
+      name: it.name,
+      price: Number(it.price),
+      quantity: it.quantity,
+      subtotal: Number(it.subtotal)
+    }))
+  );
+
+  const shippingAddress: any = order.shippingAddressSnapshot || {};
 
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 50, size: 'A4' });
@@ -68,16 +88,16 @@ export const generateInvoicePDF = async (
       .fillColor('#1e293b')
       .text('Billed To / Delivered To:', 50, 150);
 
-    const addr = order.shippingAddress;
-    const cust: any = order.customer;
+    const addr = shippingAddress;
+    const cust = order.customer;
     doc
       .fontSize(9)
       .font('Helvetica')
       .fillColor('#334155')
       .text(addr.fullName || cust?.name || 'Valued Customer', 50, 168)
-      .text(addr.street, 50, 182)
-      .text(`${addr.city}, ${addr.state} - ${addr.postalCode}`, 50, 196)
-      .text(`${addr.country} | Phone: ${addr.phone || cust?.phone || 'N/A'}`, 50, 210);
+      .text(addr.street || '', 50, 182)
+      .text(`${addr.city || ''}, ${addr.state || ''} - ${addr.postalCode || ''}`, 50, 196)
+      .text(`${addr.country || 'India'} | Phone: ${addr.phone || cust?.phone || 'N/A'}`, 50, 210);
 
     // Table Header
     const tableTop = 240;
@@ -98,7 +118,7 @@ export const generateInvoicePDF = async (
 
     // Table Rows
     let y = tableTop + 30;
-    order.items.forEach((item, index) => {
+    items.forEach((item, index) => {
       doc
         .fontSize(9)
         .font('Helvetica')
@@ -121,24 +141,29 @@ export const generateInvoicePDF = async (
 
     // Totals Section
     const totalsLeft = 360;
+    const subtotal = Number(order.subtotal);
+    const discount = Number(order.discount);
+    const shippingCost = Number(order.shippingCost);
+    const total = Number(order.total);
+
     doc
       .fontSize(9)
       .font('Helvetica')
       .fillColor('#475569')
       .text('Subtotal:', totalsLeft, y)
-      .text(`₹${order.subtotal.toFixed(2)}`, 460, y, { align: 'right', width: 80 });
+      .text(`₹${subtotal.toFixed(2)}`, 460, y, { align: 'right', width: 80 });
 
     y += 18;
-    if (order.discount > 0) {
+    if (discount > 0) {
       doc
-        .text(`Discount (${order.couponCode || 'Coupon'}):`, totalsLeft, y)
-        .text(`- ₹${order.discount.toFixed(2)}`, 460, y, { align: 'right', width: 80 });
+        .text('Discount:', totalsLeft, y)
+        .text(`- ₹${discount.toFixed(2)}`, 460, y, { align: 'right', width: 80 });
       y += 18;
     }
 
     doc
       .text('Shipping:', totalsLeft, y)
-      .text(order.shippingCost === 0 ? 'FREE' : `₹${order.shippingCost.toFixed(2)}`, 460, y, {
+      .text(shippingCost === 0 ? 'FREE' : `₹${shippingCost.toFixed(2)}`, 460, y, {
         align: 'right',
         width: 80
       });
@@ -154,7 +179,7 @@ export const generateInvoicePDF = async (
       .font('Helvetica-Bold')
       .fillColor('#1e40af')
       .text('Total Amount:', totalsLeft, y)
-      .text(`₹${order.total.toFixed(2)}`, 460, y, { align: 'right', width: 80 });
+      .text(`₹${total.toFixed(2)}`, 460, y, { align: 'right', width: 80 });
 
     // Multi-Vendor Fulfillment Info
     y += 45;
@@ -166,13 +191,13 @@ export const generateInvoicePDF = async (
         .text('Vendor Fulfillment Suborders:', 50, y);
 
       y += 16;
-      order.vendorOrders.forEach((vo: any) => {
+      order.vendorOrders.forEach((vo) => {
         doc
           .fontSize(8)
           .font('Helvetica')
           .fillColor('#475569')
           .text(
-            `• Vendor: ${vo.vendor?.name || 'Vendor'} | Items: ${vo.items.length} | Status: ${vo.status} | Tracking: ${vo.trackingNumber || 'Pending'}`,
+            `• Vendor: ${vo.vendor.businessName || 'Vendor'} | Items: ${vo.items.length} | Status: ${vo.status}`,
             55,
             y
           );
@@ -193,4 +218,3 @@ export const generateInvoicePDF = async (
     doc.end();
   });
 };
-

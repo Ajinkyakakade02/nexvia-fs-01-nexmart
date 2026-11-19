@@ -1,6 +1,5 @@
 import { getElasticsearchClient } from '../config/elasticsearch.js';
-import prisma, { isPrismaAvailable } from '../config/prisma.js';
-import Product from '../models/Product.js';
+import prisma from '../config/prisma.js';
 import { ApiError } from '../utils/apiError.js';
 import logger from '../utils/logger.js';
 
@@ -195,23 +194,14 @@ export const reindexAll = async () => {
 
   await createIndexIfNotExists();
 
-  if (isPrismaAvailable()) {
-    const products = await prisma.product.findMany({
-      where: { isDeleted: false },
-      include: { vendor: true }
-    });
-    for (const product of products) {
-      await indexProduct(product, product.vendor?.businessName);
-    }
-    logger.info(`Re-indexed ${products.length} Prisma products to Elasticsearch`);
-    return;
-  }
-
-  const products = await Product.find({ isDeleted: false });
+  const products = await prisma.product.findMany({
+    where: { isDeleted: false },
+    include: { vendor: true }
+  });
   for (const product of products) {
-    await indexProduct(product);
+    await indexProduct(product, product.vendor?.businessName);
   }
-  logger.info(`Re-indexed ${products.length} products to Elasticsearch`);
+  logger.info(`Re-indexed ${products.length} Prisma products to Elasticsearch`);
 };
 
 export default {

@@ -1,26 +1,26 @@
-import mongoose from 'mongoose';
-import Review, { IReview } from '../models/Review.js';
-import Product from '../models/Product.js';
-import Order from '../models/Order.js';
+import prisma from '../config/prisma.js';
 import { OrderStatus, UserRole } from '../types/index.js';
 import { ApiError } from '../utils/apiError.js';
+import { serializePrisma, toDecimal } from '../utils/prismaSerializer.js';
 
 export const recalculateProductRating = async (productId: string) => {
-  const stats = await Review.aggregate([
-    { $match: { product: new mongoose.Types.ObjectId(productId), isApproved: true } },
-    {
-      $group: {
-        _id: '$product',
-        avgRating: { $avg: '$rating' },
-        ratingCount: { $sum: 1 }
-      }
+  const stats = await prisma.review.aggregate({
+    where: { productId, isApproved: true },
+    _avg: { rating: true },
+    _count: { rating: true }
+  });
+
+  const avgRating = stats._avg.rating ? Math.round(Number(stats._avg.rating) * 10) / 10 : 0;
+  const ratingCount = stats._count.rating || 0;
+
+  await prisma.product.update({
+    where: { id: productId },
+    data: {
+      avgRating: toDecimal(avgRating),
+      ratingCount
     }
-  ]);
+  });
 
-  const avgRating = stats[0] ? Math.round(stats[0].avgRating * 10) / 10 : 0;
-  const ratingCount = stats[0]?.ratingCount || 0;
-
-  await Product.findByIdAndUpdate(productId, { avgRating, ratingCount });
   return { avgRating, ratingCount };
 };
 
@@ -33,15 +33,21 @@ export const createReview = async (
     comment: string;
   }
 ) => {
-  const product = await Product.findOne({ _id: data.productId, isDeleted: false });
+  const product = await prisma.product.findFirst({
+    where: { id: data.productId, isDeleted: false }
+  });
   if (!product) {
     throw ApiError.notFound('Product not found');
   }
 
   // One review per customer per product
-  const existingReview = await Review.findOne({
-    customer: customerId,
-    product: data.productId
+  const existingReview = await prisma.review.findUnique({
+    where: {
+      customerId_productId: {
+        customerId,
+        productId: data.productId
+      }
+    }
   });
 
   if (existingReview) {
@@ -49,29 +55,44 @@ export const createReview = async (
   }
 
   // Check verified purchase (customer has delivered order containing product)
-  const deliveredOrder = await Order.findOne({
-    customer: customerId,
-    overallStatus: OrderStatus.DELIVERED,
-    'items.product': data.productId
+  const deliveredItem = await prisma.vendorOrderItem.findFirst({
+    where: {
+      productId: data.productId,
+      vendorOrder: {
+        order: {
+          customerId,
+          overallStatus: OrderStatus.DELIVERED
+        }
+      }
+    },
+    include: {
+      vendorOrder: {
+        select: { orderId: true }
+      }
+    }
   });
 
-  const isVerifiedPurchase = !!deliveredOrder;
+  const isVerifiedPurchase = !!deliveredItem;
 
-  const review = new Review({
-    customer: customerId,
-    product: data.productId,
-    order: deliveredOrder?._id,
-    rating: data.rating,
-    title: data.title,
-    comment: data.comment,
-    isVerifiedPurchase,
-    isApproved: true
+  const review = await prisma.review.create({
+    data: {
+      customerId,
+      productId: data.productId,
+      orderId: deliveredItem?.vendorOrder?.orderId || null,
+      rating: data.rating,
+      title: data.title,
+      comment: data.comment,
+      isVerifiedPurchase,
+      isApproved: true
+    },
+    include: {
+      customer: { select: { id: true, name: true, avatar: true } }
+    }
   });
 
-  await review.save();
   await recalculateProductRating(data.productId);
 
-  return review;
+  return serializePrisma(review);
 };
 
 export const updateReview = async (
@@ -79,37 +100,44 @@ export const updateReview = async (
   reviewId: string,
   data: { rating?: number; title?: string; comment?: string }
 ) => {
-  const review = await Review.findById(reviewId);
+  const review = await prisma.review.findUnique({ where: { id: reviewId } });
   if (!review) {
     throw ApiError.notFound('Review not found');
   }
 
-  if (review.customer.toString() !== customerId) {
+  if (review.customerId !== customerId) {
     throw ApiError.forbidden('You can only update your own review');
   }
 
-  if (data.rating !== undefined) review.rating = data.rating;
-  if (data.title !== undefined) review.title = data.title;
-  if (data.comment !== undefined) review.comment = data.comment;
+  const updated = await prisma.review.update({
+    where: { id: reviewId },
+    data: {
+      ...(data.rating !== undefined ? { rating: data.rating } : {}),
+      ...(data.title !== undefined ? { title: data.title } : {}),
+      ...(data.comment !== undefined ? { comment: data.comment } : {})
+    },
+    include: {
+      customer: { select: { id: true, name: true, avatar: true } }
+    }
+  });
 
-  await review.save();
-  await recalculateProductRating(review.product.toString());
+  await recalculateProductRating(review.productId);
 
-  return review;
+  return serializePrisma(updated);
 };
 
 export const deleteReview = async (userId: string, role: UserRole, reviewId: string) => {
-  const review = await Review.findById(reviewId);
+  const review = await prisma.review.findUnique({ where: { id: reviewId } });
   if (!review) {
     throw ApiError.notFound('Review not found');
   }
 
-  if (role !== UserRole.ADMIN && review.customer.toString() !== userId) {
+  if (role !== UserRole.ADMIN && review.customerId !== userId) {
     throw ApiError.forbidden('You do not have permission to delete this review');
   }
 
-  const productId = review.product.toString();
-  await review.deleteOne();
+  const productId = review.productId;
+  await prisma.review.delete({ where: { id: reviewId } });
   await recalculateProductRating(productId);
 
   return { message: 'Review deleted successfully' };
@@ -123,17 +151,20 @@ export const getProductReviews = async (
   const skip = (page - 1) * limit;
 
   const [reviews, total] = await Promise.all([
-    Review.find({ product: productId, isApproved: true })
-      .populate('customer', 'name avatar')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean(),
-    Review.countDocuments({ product: productId, isApproved: true })
+    prisma.review.findMany({
+      where: { productId, isApproved: true },
+      skip,
+      take: limit,
+      orderBy: { createdAt: 'desc' },
+      include: {
+        customer: { select: { id: true, name: true, avatar: true } }
+      }
+    }),
+    prisma.review.count({ where: { productId, isApproved: true } })
   ]);
 
   return {
-    data: reviews,
+    data: serializePrisma(reviews),
     pagination: {
       total,
       page,
@@ -142,4 +173,3 @@ export const getProductReviews = async (
     }
   };
 };
-

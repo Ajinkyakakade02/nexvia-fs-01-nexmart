@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
-import mongoose from 'mongoose';
+import { Prisma } from '@prisma/client';
 import { StatusCodes } from 'http-status-codes';
 import { ApiError } from '../utils/apiError.js';
 import { error as sendError } from '../utils/apiResponse.js';
@@ -28,22 +28,20 @@ export const errorHandler = (
       field: e.path.join('.'),
       message: e.message
     }));
-  } else if (err instanceof mongoose.Error.ValidationError) {
-    statusCode = StatusCodes.BAD_REQUEST;
-    message = 'Database validation error';
-    errors = Object.values(err.errors).map((e: any) => ({
-      field: e.path,
-      message: e.message
-    }));
-  } else if (err instanceof mongoose.Error.CastError) {
-    statusCode = StatusCodes.BAD_REQUEST;
-    message = `Invalid ID format for ${err.path}: ${err.value}`;
-  } else if (err.code === 11000) {
-    statusCode = StatusCodes.CONFLICT;
-    const duplicateKey = Object.keys(err.keyValue || {})[0];
-    message = duplicateKey
-      ? `A record with this ${duplicateKey} already exists`
-      : 'Duplicate resource key';
+  } else if (err instanceof Prisma.PrismaClientKnownRequestError) {
+    if (err.code === 'P2002') {
+      statusCode = StatusCodes.CONFLICT;
+      const target = (err.meta?.target as string[]) || [];
+      message = target.length > 0
+        ? `A record with this ${target.join(', ')} already exists`
+        : 'Duplicate resource key';
+    } else if (err.code === 'P2025') {
+      statusCode = StatusCodes.NOT_FOUND;
+      message = 'Requested record not found';
+    } else {
+      statusCode = StatusCodes.BAD_REQUEST;
+      message = `Database error: ${err.message}`;
+    }
   } else if (err.name === 'JsonWebTokenError') {
     statusCode = StatusCodes.UNAUTHORIZED;
     message = 'Invalid authentication token';
@@ -60,12 +58,5 @@ export const errorHandler = (
     logger.warn(`Handled Client Error [${statusCode}]: ${message}`, errors);
   }
 
-  sendError(
-    res,
-    message,
-    statusCode,
-    env.NODE_ENV === 'development' ? { details: errors, stack: err.stack } : errors
-  );
+  sendError(res, message, statusCode, errors);
 };
-
-export default errorHandler;
