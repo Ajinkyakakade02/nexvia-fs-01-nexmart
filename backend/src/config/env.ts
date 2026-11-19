@@ -1,6 +1,4 @@
-
-    // REDIS
-    REDIS_URL: redisUrlSchema,
+REDIS_URL: redisUrlSchema,
 
     // ELASTICSEARCH (optional integration)
     ELASTICSEARCH_URL: z.string().optional().default('http://localhost:9200'),
