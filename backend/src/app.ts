@@ -23,7 +23,12 @@ app.use(helmet({
 // CORS configuration
 app.use(
   cors({
-    origin: [env.CLIENT_URL, 'http://localhost:5173', 'http://localhost:3000'],
+    origin: [
+      env.CLIENT_URL,
+      'https://frontend-sooty-two-50.vercel.app',
+      'http://localhost:5173',
+      'http://localhost:3000'
+    ],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'x-razorpay-signature']

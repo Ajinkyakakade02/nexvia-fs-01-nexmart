@@ -4,13 +4,11 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 import * as analyticsService from '../services/analyticsService.js';
 import * as commissionService from '../services/commissionService.js';
 import * as orderService from '../services/orderService.js';
-import User from '../models/User.js';
-import VendorProfile from '../models/VendorProfile.js';
-import Product from '../models/Product.js';
-import Payment from '../models/Payment.js';
+import prisma from '../config/prisma.js';
 import { OnboardingStatus, UserRole } from '../types/index.js';
 import { success } from '../utils/apiResponse.js';
 import { ApiError } from '../utils/apiError.js';
+import { serializePrisma } from '../utils/prismaSerializer.js';
 
 export const getDashboard = asyncHandler(async (_req: Request, res: Response) => {
   const stats = await analyticsService.getAdminDashboardStats();
@@ -23,25 +21,41 @@ export const getUsers = asyncHandler(async (req: Request, res: Response) => {
   const role = req.query.role as string;
   const search = req.query.search as string;
 
-  const query: any = {};
-  if (role) query.role = role;
+  const where: any = {};
+  if (role) where.role = role as UserRole;
   if (search) {
-    query.$or = [
-      { name: { $regex: search, $options: 'i' } },
-      { email: { $regex: search, $options: 'i' } }
+    where.OR = [
+      { name: { contains: search, mode: 'insensitive' } },
+      { email: { contains: search, mode: 'insensitive' } }
     ];
   }
 
   const skip = (page - 1) * limit;
   const [users, total] = await Promise.all([
-    User.find(query).select('-passwordHash').sort({ createdAt: -1 }).skip(skip).limit(limit),
-    User.countDocuments(query)
+    prisma.user.findMany({
+      where,
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        phone: true,
+        avatar: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true
+      },
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take: limit
+    }),
+    prisma.user.count({ where })
   ]);
 
   return res.status(StatusCodes.OK).json({
     success: true,
     message: 'Users retrieved',
-    data: users,
+    data: serializePrisma(users),
     pagination: { total, page, limit, totalPages: Math.ceil(total / limit) }
   });
 });
@@ -51,23 +65,27 @@ export const getVendors = asyncHandler(async (req: Request, res: Response) => {
   const limit = parseInt(req.query.limit as string) || 20;
   const status = req.query.status as string;
 
-  const query: any = {};
-  if (status) query.onboardingStatus = status;
+  const where: any = {};
+  if (status) where.onboardingStatus = status as OnboardingStatus;
 
   const skip = (page - 1) * limit;
   const [vendors, total] = await Promise.all([
-    VendorProfile.find(query)
-      .populate('user', 'name email phone createdAt')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit),
-    VendorProfile.countDocuments(query)
+    prisma.vendorProfile.findMany({
+      where,
+      include: {
+        user: { select: { id: true, name: true, email: true, phone: true, createdAt: true } }
+      },
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take: limit
+    }),
+    prisma.vendorProfile.count({ where })
   ]);
 
   return res.status(StatusCodes.OK).json({
     success: true,
     message: 'Vendors retrieved',
-    data: vendors,
+    data: serializePrisma(vendors),
     pagination: { total, page, limit, totalPages: Math.ceil(total / limit) }
   });
 });
@@ -76,39 +94,52 @@ export const approveVendor = asyncHandler(async (req: Request, res: Response) =>
   const { id } = req.params;
   const { adminNotes, razorpayLinkedAccountId } = req.body;
 
-  const vendor = await VendorProfile.findById(id);
+  const vendor = await prisma.vendorProfile.findUnique({ where: { id } });
   if (!vendor) {
     throw ApiError.notFound('Vendor profile not found');
   }
 
-  vendor.onboardingStatus = OnboardingStatus.APPROVED;
-  vendor.approvedAt = new Date();
-  if (adminNotes) vendor.adminNotes = adminNotes;
-  if (razorpayLinkedAccountId) vendor.razorpayLinkedAccountId = razorpayLinkedAccountId;
+  const updated = await prisma.$transaction(async (tx) => {
+    const updatedVendor = await tx.vendorProfile.update({
+      where: { id },
+      data: {
+        onboardingStatus: OnboardingStatus.APPROVED,
+        approvedAt: new Date(),
+        ...(adminNotes ? { adminNotes } : {}),
+        ...(razorpayLinkedAccountId ? { razorpayLinkedAccountId } : {})
+      }
+    });
 
-  await vendor.save();
+    await tx.user.update({
+      where: { id: vendor.userId },
+      data: { role: UserRole.VENDOR }
+    });
 
-  // Ensure user has VENDOR role
-  await User.findByIdAndUpdate(vendor.user, { role: UserRole.VENDOR });
+    return updatedVendor;
+  });
 
-  return success(res, vendor, 'Vendor approved successfully', StatusCodes.OK);
+  return success(res, serializePrisma(updated), 'Vendor approved successfully', StatusCodes.OK);
 });
 
 export const rejectVendor = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
   const { adminNotes } = req.body;
 
-  const vendor = await VendorProfile.findById(id);
+  const vendor = await prisma.vendorProfile.findUnique({ where: { id } });
   if (!vendor) {
     throw ApiError.notFound('Vendor profile not found');
   }
 
-  vendor.onboardingStatus = OnboardingStatus.REJECTED;
-  vendor.rejectedAt = new Date();
-  if (adminNotes) vendor.adminNotes = adminNotes;
+  const updated = await prisma.vendorProfile.update({
+    where: { id },
+    data: {
+      onboardingStatus: OnboardingStatus.REJECTED,
+      rejectedAt: new Date(),
+      ...(adminNotes ? { adminNotes } : {})
+    }
+  });
 
-  await vendor.save();
-  return success(res, vendor, 'Vendor application rejected', StatusCodes.OK);
+  return success(res, serializePrisma(updated), 'Vendor application rejected', StatusCodes.OK);
 });
 
 export const getProducts = asyncHandler(async (req: Request, res: Response) => {
@@ -117,19 +148,23 @@ export const getProducts = asyncHandler(async (req: Request, res: Response) => {
   const skip = (page - 1) * limit;
 
   const [products, total] = await Promise.all([
-    Product.find({ isDeleted: false })
-      .populate('category', 'name slug')
-      .populate('vendor', 'name email')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit),
-    Product.countDocuments({ isDeleted: false })
+    prisma.product.findMany({
+      where: { isDeleted: false },
+      include: {
+        category: { select: { id: true, name: true, slug: true } },
+        vendor: { select: { id: true, businessName: true, businessEmail: true } }
+      },
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take: limit
+    }),
+    prisma.product.count({ where: { isDeleted: false } })
   ]);
 
   return res.status(StatusCodes.OK).json({
     success: true,
     message: 'Admin products retrieved',
-    data: products,
+    data: serializePrisma(products),
     pagination: { total, page, limit, totalPages: Math.ceil(total / limit) }
   });
 });
@@ -163,22 +198,28 @@ export const getPayments = asyncHandler(async (req: Request, res: Response) => {
   const skip = (page - 1) * limit;
 
   const [payments, total] = await Promise.all([
-    Payment.find()
-      .populate({
-        path: 'order',
-        select: 'orderNumber customer total',
-        populate: { path: 'customer', select: 'name email' }
-      })
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit),
-    Payment.countDocuments()
+    prisma.payment.findMany({
+      include: {
+        order: {
+          select: {
+            id: true,
+            orderNumber: true,
+            total: true,
+            customer: { select: { id: true, name: true, email: true } }
+          }
+        }
+      },
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take: limit
+    }),
+    prisma.payment.count()
   ]);
 
   return res.status(StatusCodes.OK).json({
     success: true,
     message: 'Payments retrieved',
-    data: payments,
+    data: serializePrisma(payments),
     pagination: { total, page, limit, totalPages: Math.ceil(total / limit) }
   });
 });
@@ -218,4 +259,3 @@ export const reindexSearch = asyncHandler(async (_req: Request, res: Response) =
   await searchService.reindexAll();
   return success(res, null, 'Elasticsearch search index rebuild initiated', StatusCodes.OK);
 });
-

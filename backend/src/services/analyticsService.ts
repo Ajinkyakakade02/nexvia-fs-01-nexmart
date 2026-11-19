@@ -1,10 +1,6 @@
-import Order from '../models/Order.js';
-import User from '../models/User.js';
-import VendorProfile from '../models/VendorProfile.js';
-import Product from '../models/Product.js';
-import Commission from '../models/Commission.js';
-import Payment from '../models/Payment.js';
+import prisma from '../config/prisma.js';
 import { OnboardingStatus, PaymentStatus, UserRole } from '../types/index.js';
+import { serializePrisma } from '../utils/prismaSerializer.js';
 
 export const getAdminDashboardStats = async () => {
   const [
@@ -16,83 +12,92 @@ export const getAdminDashboardStats = async () => {
     totalProducts,
     commissionAgg
   ] = await Promise.all([
-    Order.aggregate([
-      { $match: { paymentStatus: PaymentStatus.COMPLETED } },
-      { $group: { _id: null, totalSales: { $sum: '$total' } } }
-    ]),
-    Order.countDocuments(),
-    User.countDocuments({ role: UserRole.CUSTOMER }),
-    VendorProfile.countDocuments({ onboardingStatus: OnboardingStatus.APPROVED }),
-    VendorProfile.countDocuments({ onboardingStatus: OnboardingStatus.PENDING }),
-    Product.countDocuments({ isDeleted: false }),
-    Commission.aggregate([
-      { $group: { _id: null, totalCommission: { $sum: '$commissionAmount' } } }
-    ])
+    prisma.order.aggregate({
+      where: { paymentStatus: PaymentStatus.COMPLETED },
+      _sum: { total: true }
+    }),
+    prisma.order.count(),
+    prisma.user.count({ where: { role: UserRole.CUSTOMER } }),
+    prisma.vendorProfile.count({ where: { onboardingStatus: OnboardingStatus.APPROVED } }),
+    prisma.vendorProfile.count({ where: { onboardingStatus: OnboardingStatus.PENDING } }),
+    prisma.product.count({ where: { isDeleted: false } }),
+    prisma.commission.aggregate({
+      _sum: { commissionAmount: true }
+    })
   ]);
 
-  const totalSales = salesAgg[0]?.totalSales || 0;
-  const totalCommission = commissionAgg[0]?.totalCommission || 0;
+  const totalSales = salesAgg._sum.total ? Number(salesAgg._sum.total) : 0;
+  const totalCommission = commissionAgg._sum.commissionAmount ? Number(commissionAgg._sum.commissionAmount) : 0;
 
-  // Revenue by month (last 6-12 months)
+  // Revenue by month (last 6 months)
   const sixMonthsAgo = new Date();
   sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
 
-  const revenueByMonth = await Order.aggregate([
-    {
-      $match: {
-        paymentStatus: PaymentStatus.COMPLETED,
-        createdAt: { $gte: sixMonthsAgo }
-      }
+  const completedOrders = await prisma.order.findMany({
+    where: {
+      paymentStatus: PaymentStatus.COMPLETED,
+      createdAt: { gte: sixMonthsAgo }
     },
-    {
-      $group: {
-        _id: {
-          year: { $year: '$createdAt' },
-          month: { $month: '$createdAt' }
-        },
-        revenue: { $sum: '$total' },
-        orders: { $sum: 1 }
-      }
+    select: {
+      createdAt: true,
+      total: true
     },
-    { $sort: { '_id.year': 1, '_id.month': 1 } }
-  ]);
+    orderBy: { createdAt: 'asc' }
+  });
 
   const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const formattedRevenue = revenueByMonth.map((item) => ({
-    name: `${monthNames[item._id.month - 1]} ${item._id.year}`,
-    revenue: item.revenue,
-    orders: item.orders
-  }));
+  const monthlyMap = new Map<string, { name: string; revenue: number; orders: number }>();
+
+  for (const ord of completedOrders) {
+    const d = new Date(ord.createdAt);
+    const key = `${d.getFullYear()}-${d.getMonth() + 1}`;
+    const name = `${monthNames[d.getMonth()]} ${d.getFullYear()}`;
+    const existing = monthlyMap.get(key) || { name, revenue: 0, orders: 0 };
+    existing.revenue += Number(ord.total);
+    existing.orders += 1;
+    monthlyMap.set(key, existing);
+  }
+
+  const formattedRevenue = Array.from(monthlyMap.values());
 
   // Top 5 selling products
-  const topProducts = await Product.find({ isDeleted: false })
-    .sort({ soldCount: -1 })
-    .limit(5)
-    .select('name price soldCount avgRating images')
-    .lean();
+  const topProducts = await prisma.product.findMany({
+    where: { isDeleted: false },
+    orderBy: { soldCount: 'desc' },
+    take: 5,
+    select: {
+      id: true,
+      name: true,
+      price: true,
+      soldCount: true,
+      avgRating: true,
+      images: true
+    }
+  });
 
   // Order status breakdown
-  const orderStatusBreakdown = await Order.aggregate([
-    {
-      $group: {
-        _id: '$overallStatus',
-        count: { $sum: 1 }
-      }
-    }
-  ]);
+  const orderStatusBreakdown = await prisma.order.groupBy({
+    by: ['overallStatus'],
+    _count: { id: true }
+  });
 
   // Recent 10 transactions
-  const recentTransactions = await Payment.find()
-    .sort({ createdAt: -1 })
-    .limit(10)
-    .populate({
-      path: 'order',
-      select: 'orderNumber customer total',
-      populate: { path: 'customer', select: 'name email' }
-    })
-    .lean();
+  const recentTransactions = await prisma.payment.findMany({
+    take: 10,
+    orderBy: { createdAt: 'desc' },
+    include: {
+      order: {
+        select: {
+          id: true,
+          orderNumber: true,
+          total: true,
+          customer: { select: { id: true, name: true, email: true } }
+        }
+      }
+    }
+  });
 
-  return {
+  return serializePrisma({
     overview: {
       totalSales,
       totalOrders,
@@ -105,10 +110,9 @@ export const getAdminDashboardStats = async () => {
     revenueByMonth: formattedRevenue,
     topProducts,
     orderStatusBreakdown: orderStatusBreakdown.map((item) => ({
-      status: item._id,
-      count: item.count
+      status: item.overallStatus,
+      count: item._count.id
     })),
     recentTransactions
-  };
+  });
 };
-
