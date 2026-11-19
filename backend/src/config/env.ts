@@ -1,73 +1,121 @@
-import dotenv from 'dotenv';
-import path from 'path';
-import { z } from 'zod';
 
-// Load .env from server dir first, fallback to root dir
-dotenv.config();
-dotenv.config({ path: path.resolve(process.cwd(), '../.env') });
-dotenv.config({ path: path.resolve(process.cwd(), '../../.env') });
+    // REDIS
+    REDIS_URL: redisUrlSchema,
 
-const envSchema = z.object({
-  NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
-  PORT: z.coerce.number().default(5000),
-  CLIENT_URL: z.string().default('https://frontend-sooty-two-50.vercel.app'),
-  API_BASE_URL: z.string().default('http://localhost:5000'),
-  MONGODB_URI: z.string().optional().default(''),
+    // ELASTICSEARCH (optional integration)
+    ELASTICSEARCH_URL: z.string().optional().default('http://localhost:9200'),
+    ELASTICSEARCH_USERNAME: z.string().optional().default(''),
+    ELASTICSEARCH_PASSWORD: z.string().optional().default(''),
 
-  DATABASE_URL: z
-    .string()
-    .default(
-      'postgresql://neondb_owner:npg_VRmS2DyeXW5P@ep-broad-water-a1ks0ls4-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&pgbouncer=true&connect_timeout=30'
+    // AWS S3 / FILE STORAGE
+    AWS_REGION: z.string().default('ap-south-1'),
+    AWS_S3_BUCKET: z.string().optional().default(''),
+    AWS_ACCESS_KEY_ID: z.string().optional().default(''),
+    AWS_SECRET_ACCESS_KEY: z.string().optional().default(''),
+    STORAGE_PROVIDER: z.enum(['s3', 'local']).default('local'),
+
+    // PAYMENT PROVIDER
+    RAZORPAY_KEY_ID: z.string().optional().default(''),
+    RAZORPAY_KEY_SECRET: z.string().optional().default(''),
+    RAZORPAY_WEBHOOK_SECRET: z.string().optional().default(''),
+    PAYMENT_PROVIDER: z.enum(['razorpay', 'simulation']).default('simulation'),
+
+    // PLATFORM
+    PLATFORM_NAME: z.string().default('NexMart'),
+    PLATFORM_COMMISSION_PERCENT: z.coerce.number().min(0).max(100).default(10),
+    DEFAULT_CURRENCY: z.string().default('INR'),
+
+    // ADMIN SEED
+    ADMIN_EMAIL: z.preprocess(
+      blankAsUndefined,
+      z.string().email().default('admin@nexmart.com'),
     ),
-  DIRECT_URL: z
-    .string()
-    .default(
-      'postgresql://neondb_owner:npg_VRmS2DyeXW5P@ep-broad-water-a1ks0ls4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require'
-    ),
-  DB_PROVIDER: z.string().default('prisma'),
+    // No hardcoded admin password. Set this only in a private environment
+    // when running the admin seed process.
+    ADMIN_PASSWORD: z.string().default(''),
+    ADMIN_NAME: z.string().default('Platform Admin'),
 
-  JWT_ACCESS_SECRET: z.string().default('dev_jwt_access_secret_key_1234567890_min_32_chars_fs01'),
-  JWT_REFRESH_SECRET: z.string().default('dev_jwt_refresh_secret_key_1234567890_min_32_chars_fs01'),
-  JWT_ACCESS_EXPIRY: z.string().default('15m'),
-  JWT_REFRESH_EXPIRY: z.string().default('7d'),
+    // RATE LIMITING
+    RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(900000),
+    RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(100),
+    AUTH_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(20),
+  })
+  .superRefine((data, ctx) => {
+    if (data.ADMIN_PASSWORD.length > 0 && data.ADMIN_PASSWORD.length < 12) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['ADMIN_PASSWORD'],
+        message: 'ADMIN_PASSWORD must contain at least 12 characters when provided.',
+      });
+    }
 
-  REDIS_URL: z
-    .string()
-    .default(
-      'rediss://default:gQAAAAAAAyuWAAIgcDI3OWRhMzNkOWJlMWI0NTI2YTg2ZDVmMjY5MWQwMzMxNg@absolute-possum-207766.upstash.io:6379'
-    ),
+    if (data.NODE_ENV !== 'production') {
+      return;
+    }
 
-  ELASTICSEARCH_URL: z.string().default('http://localhost:9200'),
-  ELASTICSEARCH_USERNAME: z.string().optional().default(''),
-  ELASTICSEARCH_PASSWORD: z.string().optional().default(''),
+    // In production, never silently fall back to localhost URLs or development
+    // signing secrets. These values must be configured in the hosting provider.
+    const requiredProductionVariables = [
+      'DATABASE_URL',
+      'DIRECT_URL',
+      'REDIS_URL',
+      'JWT_ACCESS_SECRET',
+      'JWT_REFRESH_SECRET',
+    ] as const;
 
-  AWS_REGION: z.string().default('ap-south-1'),
-  AWS_S3_BUCKET: z.string().optional().default(''),
-  AWS_ACCESS_KEY_ID: z.string().optional().default(''),
-  AWS_SECRET_ACCESS_KEY: z.string().optional().default(''),
-  STORAGE_PROVIDER: z.enum(['s3', 'local']).default('local'),
+    for (const variableName of requiredProductionVariables) {
+      if (!process.env[variableName]?.trim()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [variableName],
+          message: `${variableName} must be explicitly configured in production.`,
+        });
+      }
+    }
 
-  RAZORPAY_KEY_ID: z.string().optional().default(''),
-  RAZORPAY_KEY_SECRET: z.string().optional().default(''),
-  RAZORPAY_WEBHOOK_SECRET: z.string().optional().default(''),
-  PAYMENT_PROVIDER: z.enum(['razorpay', 'simulation']).default('simulation'),
+    if (
+      data.DATABASE_URL.includes('localhost') ||
+      data.DATABASE_URL.includes('127.0.0.1') ||
+      data.DIRECT_URL.includes('localhost') ||
+      data.DIRECT_URL.includes('127.0.0.1')
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['DATABASE_URL'],
+        message: 'Production database URLs must not point to localhost.',
+      });
+    }
 
-  PLATFORM_NAME: z.string().default('NexMart'),
-  PLATFORM_COMMISSION_PERCENT: z.coerce.number().default(10),
-  DEFAULT_CURRENCY: z.string().default('INR'),
+    if (data.REDIS_URL.includes('localhost') || data.REDIS_URL.includes('127.0.0.1')) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['REDIS_URL'],
+        message: 'Production REDIS_URL must not point to localhost.',
+      });
+    }
 
-  ADMIN_EMAIL: z.string().default('admin@nexmart.com'),
-  ADMIN_PASSWORD: z.string().default('Admin@12345'),
-  ADMIN_NAME: z.string().default('Platform Admin'),
+    if (data.JWT_ACCESS_SECRET.startsWith('local-only-')) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['JWT_ACCESS_SECRET'],
+        message: 'Set a unique JWT_ACCESS_SECRET in production.',
+      });
+    }
 
-  RATE_LIMIT_WINDOW_MS: z.coerce.number().default(900000),
-  RATE_LIMIT_MAX_REQUESTS: z.coerce.number().default(100),
-  AUTH_RATE_LIMIT_MAX: z.coerce.number().default(20)
-});
+    if (data.JWT_REFRESH_SECRET.startsWith('local-only-')) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['JWT_REFRESH_SECRET'],
+        message: 'Set a unique JWT_REFRESH_SECRET in production.',
+      });
+    }
+  });
 
 const parsedEnv = envSchema.safeParse(process.env);
 
 if (!parsedEnv.success) {
+  // Zod's formatted issues identify variable names and validation messages;
+  // do not print process.env or connection-string values here.
   console.error('Invalid environment variables:', parsedEnv.error.format());
   throw new Error('Environment variable validation failed');
 }
