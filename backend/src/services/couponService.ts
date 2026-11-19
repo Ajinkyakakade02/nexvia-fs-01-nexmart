@@ -78,14 +78,14 @@ export const recordCouponUsage = async (code: string, userId: string, orderId?: 
     }),
     ...(orderId
       ? [
-          prisma.couponUsage.create({
-            data: {
-              couponId: coupon.id,
-              userId,
-              orderId
-            }
-          })
-        ]
+        prisma.couponUsage.create({
+          data: {
+            couponId: coupon.id,
+            userId,
+            orderId
+          }
+        })
+      ]
       : [])
   ]);
 };
