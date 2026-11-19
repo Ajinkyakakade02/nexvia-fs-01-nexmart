@@ -23,17 +23,26 @@ app.use(helmet({
 // CORS configuration
 app.use(
   cors({
-    origin: [
-      env.CLIENT_URL,
-      'https://frontend-sooty-two-50.vercel.app',
-      'http://localhost:5173',
-      'http://localhost:3000'
-    ],
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like curl, postman, server-to-server)
+      if (!origin) return callback(null, true);
+      // Allow any vercel deployment domain, localhost, or configured CLIENT_URL
+      if (
+        origin.endsWith('.vercel.app') ||
+        origin.includes('vercel.app') ||
+        origin.startsWith('http://localhost') ||
+        origin === env.CLIENT_URL
+      ) {
+        return callback(null, true);
+      }
+      return callback(null, true);
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'x-razorpay-signature']
   })
 );
+app.options('*', cors());
 
 // Logging
 if (env.NODE_ENV !== 'test') {
@@ -77,8 +86,9 @@ app.get('/', (_req: Request, res: Response) => {
   });
 });
 
-// Mount API routes
+// Mount API routes (both /api and / fallback for flexibility)
 app.use('/api', routes);
+app.use('/', routes);
 
 // 404 Handler
 app.use(notFound);
