@@ -1,5 +1,5 @@
 export const APP_NAME = 'NexMart';
-export const API_BASE_URL = '/api';
+export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string) || '/api';
 
 export const USER_ROLES = {
   CUSTOMER: 'customer',
