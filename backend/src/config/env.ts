@@ -10,12 +10,21 @@ dotenv.config({ path: path.resolve(process.cwd(), '../../.env') });
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   PORT: z.coerce.number().default(5000),
-  CLIENT_URL: z.string().default('http://localhost:5173'),
+  CLIENT_URL: z.string().default('https://frontend-sooty-two-50.vercel.app'),
   API_BASE_URL: z.string().default('http://localhost:5000'),
+  MONGODB_URI: z.string().optional().default(''),
 
-  MONGODB_URI: z.string().default('mongodb://localhost:27017/fs01_marketplace'),
-  DATABASE_URL: z.string().default('postgresql://postgres:postgrespassword@localhost:5432/fs01_marketplace?schema=public'),
-  DB_PROVIDER: z.enum(['auto', 'prisma', 'mongodb']).default('auto'),
+  DATABASE_URL: z
+    .string()
+    .default(
+      'postgresql://neondb_owner:npg_VRmS2DyeXW5P@ep-broad-water-a1ks0ls4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require'
+    ),
+  DIRECT_URL: z
+    .string()
+    .default(
+      'postgresql://neondb_owner:npg_VRmS2DyeXW5P@ep-broad-water-a1ks0ls4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require'
+    ),
+  DB_PROVIDER: z.string().default('prisma'),
 
   JWT_ACCESS_SECRET: z.string().default('dev_jwt_access_secret_key_1234567890_min_32_chars_fs01'),
   JWT_REFRESH_SECRET: z.string().default('dev_jwt_refresh_secret_key_1234567890_min_32_chars_fs01'),
