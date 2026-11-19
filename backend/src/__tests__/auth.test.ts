@@ -165,7 +165,7 @@ describe('NexMart Authentication & Authorization Suite', () => {
         .post('/api/auth/login')
         .send({
           email: 'admin@nexmart.com',
-          password: 'Admin@12345'
+          password: process.env.ADMIN_PASSWORD || 'Admin123!'
         });
 
       expect(res.status).toBe(200);

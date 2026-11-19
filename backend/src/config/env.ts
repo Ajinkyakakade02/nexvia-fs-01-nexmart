@@ -17,7 +17,7 @@ const envSchema = z.object({
   DATABASE_URL: z
     .string()
     .default(
-      'postgresql://neondb_owner:npg_VRmS2DyeXW5P@ep-broad-water-a1ks0ls4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require'
+      'postgresql://neondb_owner:npg_VRmS2DyeXW5P@ep-broad-water-a1ks0ls4-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&pgbouncer=true&connect_timeout=30'
     ),
   DIRECT_URL: z
     .string()
@@ -31,7 +31,11 @@ const envSchema = z.object({
   JWT_ACCESS_EXPIRY: z.string().default('15m'),
   JWT_REFRESH_EXPIRY: z.string().default('7d'),
 
-  REDIS_URL: z.string().default('redis://localhost:6379'),
+  REDIS_URL: z
+    .string()
+    .default(
+      'rediss://default:gQAAAAAAAyuWAAIgcDI3OWRhMzNkOWJlMWI0NTI2YTg2ZDVmMjY5MWQwMzMxNg@absolute-possum-207766.upstash.io:6379'
+    ),
 
   ELASTICSEARCH_URL: z.string().default('http://localhost:9200'),
   ELASTICSEARCH_USERNAME: z.string().optional().default(''),
